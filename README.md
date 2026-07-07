@@ -3,19 +3,24 @@
 
 Blatter-Pattyn ISMIP Plus setup for Elmer/Ice
 
-Notes for viewing this readme:
-The markdown should automatically be interpreted when viewing this file on the github website.
+Notes for viewing this readme: \
+The markdown should automatically be interpreted when viewing this file on the github website. \
 At a Linux terminal glow is recommended.
-```
-glow README.md
+```bash
+glow -w 0 README.md
 ```
 
 ## Solver input files
 
-SSA.sif
-SSA_r.sif
+#### SSA.sif
 
-BP.sif
+Transient 2D simulation using Shallow Shelf Approximation (SSA).
+
+### SSA_r.sif
+
+"r" for "restart", though technically it isn't a restart. It uses the griddatareader to read in a spunup geometry from a previous simulation. Apart from that it is essentially the same as SSA.sif
+
+### BP.sif
 
 
 ## Mesh generation
@@ -37,7 +42,7 @@ We can use a script to convert pvtu files to gridded netcdf (linear interpolatio
 This can make it easier to access a spun up state when starting on a new mesh.
 
 Example:
-```
+```bash
 python3 tools/pvtu_to_netcdf.py spinup/VTUoutputs/ssa_t0002.pvtu  --variables h  --dx 4005  --output spinup/VTUoutputs/h_4km.nc
 ```
 
@@ -53,22 +58,22 @@ meshgen/build_mesh.sh mesh/coarse_test 5 --dx-refined 2000 --dx-background 4000 
 
 (The module dependency automatically loads the conda environment)
 module load elmer/devel
-```
+```bash
 cp spinup
-```
 mpirun -np 5 ElmerSolver SSA.sif
+```
 
 
 Then process the geometry into netcdf file:
-```
-conda activate outflow \\
+```bash
+conda activate outflow 
 python3 tools/pvtu_to_netcdf.py spinup/VTUoutputs/ssa_t0301.pvtu  --variables h zs zb groundedmask  --dx 1000  --output spinup/VTUoutputs/CoarseSpunupGeom.nc
 ```
 
 meshgen/build_mesh.sh mesh/medium_test 5 --dx-refined 1000 --dx-background 2000 --transition 50000
 
 and restart:
-```
+```bash
 module load elmer/devel
 mpirun -np 5 ElmerSolver SSA_r.sif
 ```
@@ -76,6 +81,8 @@ mpirun -np 5 ElmerSolver SSA_r.sif
 mpirun -np 5 ElmerSolver SSA.sif > output.txt
 
 Watching thickness NRM evolve over time:
+```bash
 tail -f output | grep -P 'Time|(?=.*NRM)(?=.*thickness).*' 
+```
 
 grep -P 'Time|(?=.*NRM)(?=.*thickness).*' output.txt       
