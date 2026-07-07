@@ -15,7 +15,7 @@ MINH = 10.0
 beta = 0.1/1000.0
 
 eta = (1.0*100.0)^(-1.0/nn)
-
+--! approx minus 5C
 
 -- MISMIP+ bedrock elevation, Eq. (1) and Table 1 of Cornford et al. (2020)
 xbar = 300.0e3

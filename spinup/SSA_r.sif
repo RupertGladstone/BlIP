@@ -7,7 +7,7 @@
 $SCALARS_INTERVAL=1
 
 !--------------------------------------------------------
-$name="SSA"
+$name="SSA_r"
 !$dt = 10.0 / 360.0
 !$dt = #864000.0 / yearinsec ! 10 days
 $dt = #2592000.0 / yearinsec ! 30 days
@@ -32,7 +32,7 @@ Simulation
   Timestepping Method = "bdf"
   BDF Order = 2
   
-  Timestep Intervals(1) = 30000
+  Timestep Intervals(1) = 100000
   Timestep Sizes(1) = Real $dt
   Output Intervals = 100
 
@@ -54,13 +54,8 @@ End
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 Initial Condition 1
   meltRate = real 0.0  
-  H = real 800.0
   bedrock = Variable Coordinate 1, Coordinate 2
     Real Lua "mismip_bedrock(tx[0], tx[1])"
-  Zb = Variable Coordinate 1, Coordinate 2, H
-    Real Lua "Zb(tx[0], tx[1], tx[2])"
-  Zs = Variable Coordinate 1, Coordinate 2, H
-    Real Lua "Zs(tx[0], tx[1], tx[2])"
 End
 
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
@@ -69,8 +64,13 @@ Body Force 1
   Flow BodyForce 2 = Real 0.0
   Flow BodyForce 3 = Real #gravity
 
+! Sign convention:
+! Negative is ablation and positive is accumulation. On the lower surface
+! this is the opposite to the Full Stokes & free surface solver approach
+! (where the outward normal direction is positive). We're going with
+! the SSA/thickness solver convention, because we're using the same geometry
+! evolution code.
   Top Surface Accumulation = Real 0.3
-  
   Bottom Surface Accumulation  = Equals meltRate
 
   ! H internal limiters (Thickness solver)
@@ -84,9 +84,11 @@ Material 1
   Density =  Real #rhoi
   SSA Mean Density = Real #rhoi
 
-  SSA Mean Viscosity = Real #eta
-
+!  Using A = 15.4666 MPa⁻³a⁻¹ and n = 3:
+!  SSA Mean Viscosity = (2A)^(-1/3) ≈ 0.3186 MPa·a^(1/3)
+  SSA Mean Viscosity = Real 0.3186
   Viscosity Exponent = Real #1.0/nn
+
   Critical Shear Rate = Real 1.0e-10
 
   SSA Critical Thickness = Real #MINH
@@ -96,14 +98,28 @@ Material 1
 
   SSA Friction Law = String "Weertman"
   SSA Friction Exponent = Real #1.0/3.0
-  SSA Friction Parameter = Real 0.001
+  SSA Friction Parameter = Real 0.02
   SSA Friction Linear Velocity = Real 0.00001
 
 End
 
+! read in geometry from spun up state
 Solver 1
-!  exec solver = never
-  Exec Solver = "Before TimeStep"
+  Exec Solver = "Before all"
+  Equation = "GridDataReader"
+  Procedure = "GridDataReader" "GridDataReader"
+  Filename = File "VTUoutputs/MediumSpunupGeom.nc"
+!  Filename = File "VTUoutputs/CoarseSpunupGeom.nc"
+  X Dim Name = String "x"
+  Y Dim Name = String "y"
+  Variable 1 = String "h"
+  Variable 2 = String "zs"
+  Variable 3 = String "zb"
+  Variable 4 = String "groundedmask"
+End
+
+Solver 2
+  Exec Solver = "Before all"
   Equation = GroundedMask
   Procedure = "ElmerIceSolvers" "GroundedSolver"
   Variable = GroundedMask
@@ -131,8 +147,7 @@ End
 !#
 !#     - comments: * Friction law defined in material section
 !#-----------------------------------------------------------------------
-Solver 2
-!  exec solver = never
+Solver 3
 
   Equation = "SSA"
   Procedure = "ElmerIceSolvers" "SSABasalSolver"
@@ -205,8 +220,8 @@ End
 !#                           * element averaged surface mass balance [XXX, >0 blabla](elemental)
 !#                           * element averaged basal mass balance [XXX, >0 blabla] (elemental)
 !#-----------------------------------------------------------------------
-Solver 3
-!exec solver = never
+Solver 4
+  exec solver = after timestep
   Equation = "Thickness"
   Procedure = "ElmerIceSolvers" "ThicknessSolver"
 
@@ -274,9 +289,8 @@ End
 !#                           * grounded fraction [] (elemental)
 !#                           * floating fraction [] (elemental)
 !#-----------------------------------------------------------------------
-Solver 4
-!  exec solver = never
-  exec solver = before timestep
+Solver 5
+  exec solver = after timestep
   Equation = "Flotation"
   Procedure = "ElmerIceSolvers" "Flotation"
 
@@ -298,7 +312,7 @@ Solver 4
   Exported Variable 6 = -elem "sftflf"  
 End
 
-Solver 5
+Solver 6
   Exec Solver = After Timestep
 
   Equation = "Save Scalars"
@@ -330,7 +344,7 @@ Solver 5
 
 End
 
-Solver 6
+Solver 7
   Exec Solver = String "after saving"
   Equation = String "ResultOutput"
   Procedure = File "ResultOutputSolve" "ResultOutputSolver"
@@ -344,7 +358,7 @@ End
 
 !--------------------------------------------------------
 Equation 1
-  Active Solvers (6) = 1 2 3 4 5 6
+  Active Solvers (7) = 1 2 3 4 5 6 7
 End
 
 !--------------------------------------------------------
