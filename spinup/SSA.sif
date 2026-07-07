@@ -32,7 +32,7 @@ Simulation
   Timestepping Method = "bdf"
   BDF Order = 2
   
-  Timestep Intervals(1) = 10000
+  Timestep Intervals(1) = 30000
   Timestep Sizes(1) = Real $dt
   Output Intervals = 100
 
@@ -54,7 +54,7 @@ End
 !!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!!
 Initial Condition 1
   meltRate = real 0.0  
-  H = real 500.0
+  H = real 800.0
   bedrock = Variable Coordinate 1, Coordinate 2
     Real Lua "mismip_bedrock(tx[0], tx[1])"
   Zb = Variable Coordinate 1, Coordinate 2, H
@@ -95,12 +95,13 @@ Material 1
 
   SSA Critical Thickness = Real #MINH
 
-  SSA Friction Law = String "linear"
+!  SSA Friction Law = String "linear"
 !  SSA Friction Law = String "budd"
-  SSA Friction Exponent = Real 1.0
+
+  SSA Friction Law = String "Weertman"
+  SSA Friction Exponent = Real #1.0/3.0
   SSA Friction Parameter = Real 0.001
-!  SSA Friction Parameter = Real #beta
-  SSA Friction Linear Velocity = Real 0.0000000001
+  SSA Friction Linear Velocity = Real 0.00001
 
 End
 

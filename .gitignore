@@ -1,0 +1,7 @@
+*.result
+*.result.*
+*.vtu
+*.pvtu
+*~
+partitioning.*
+tc-14-2283-2020.pdf
