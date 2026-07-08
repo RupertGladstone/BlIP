@@ -11,13 +11,14 @@ $dt = #2592000.0 / yearinsec ! 30 days
 
 !--------------------------------------------------------
 Header
-  Mesh DB "mesh_medium"
+  Mesh DB "mesh"
+!  Mesh DB "mesh_medium"
 End
 
 !--------------------------------------------------------
 Constants
 !  Buoyancy Use Basal Melt = Logical False
-  Sea Level = Real 0.0
+  Sea Level = Real #zsl
   Water Density = Real #rhow
   Ice density = Real #rhoi
   Gas Constant = Real 8.314
@@ -33,7 +34,7 @@ Simulation
   Timestepping Method = "BDF"
   BDF Order = 1
 
-  Timestep Intervals = 1
+  Timestep Intervals = 100
   Timestep Sizes = Real $dt
   Output Intervals = 1
 
@@ -46,11 +47,19 @@ Simulation
 
 !  Extruded Mesh Levels = Integer 10
 
+! ElmerSolver only calls the mesh extrusion routine at all if some keyword with
+! the prefix "Extruded Mesh" is present (see ElmerSolver.F90). "Extruded Mesh
+! Levels"/"Extruded Mesh Layers" would also satisfy this, but if present they
+! make ExtrudedDivision use plain uniform/geometric division and silently
+! ignore Extruded Elements/Limits/Ratios below. "Extruded Mesh Rotational"
+! triggers extrusion without affecting that division logic.
+  Extruded Mesh Rotational = Logical False
+
 ! Split the vertical mesh into two sections, the division falling exactly at sea level for floating ice.
   Extruded Elements(2) = Integer 8 1
 ! This line should ensure the sea level falls exactly on a node layer:
 ! (choose either this line or the line below)
-  Extruded Limits(3)   = Real 0.0 #rhoi/rhow 1.0
+  Extruded Limits(3)   = Real 0.0 #rhoi/rhow# 1.0
 ! This line should ensure the sea level falls mid way between node layers:
 !  Extruded Limits(3) = Real 0.0 #2.0*rhoi/rhow - 1.0# 1.0
 ! This line gives more vertical refinement near the bottom of the lower part:
@@ -115,7 +124,7 @@ End
 
 !--------------------------------------------------------
 Material 1
-  Sea level = Real 0.0
+  Sea level = Real #zsl
   Density =  Real #rhoi
 
   Viscosity Model = String "Glen"
@@ -156,6 +165,10 @@ Solver 1
   Variable 2 = String "zs"
   Variable 3 = String "zb"
   Variable 4 = String "groundedmask"
+  Variable 5 = String "ssavelocity_1"
+  Target Variable 5 = String "horizontal velocity 1"
+  Variable 6 = String "ssavelocity_2"
+  Target Variable 6 = String "horizontal velocity 2"
 End
 
 Solver 2
@@ -226,9 +239,24 @@ Solver 4
 
 End
 
+! Required by the SlidCoef_Contact USF (Boundary Condition 4, Slip Coefficient
+! 2/3): it does VariableGet(...,'Normal Vector',UnFoundFatal=.TRUE.) internally
+! (USF_Contact.F90) inside its grounding-line contact-release check, with no
+! way to make that non-fatal from the sif - so this solver is not optional.
 Solver 5
+  Exec Solver = "Before Timestep"
+  Equation = "Normal Vector"
+  Procedure = "ElmerIceSolvers" "ComputeNormalSolver"
+  Variable = "Normal Vector"
+  Variable DOFs = 3
+  ComputeAll = Logical True
+  Optimize Bandwidth = Logical False
+End
+
+Solver 6
   Equation = "1stOrder-Stokes"
-  Procedure = "HydrostaticNSVec" "HydrostaticNSSolver"
+!  Procedure = "HydrostaticNSVec" "HydrostaticNSSolver"
+  Procedure = "HydrostaticNSVec_local" "HydrostaticNSSolver"
   Variable = -dofs 2 "Horizontal Velocity"
 
 ! Optionally populate all components to a vector (could be flow solution too)
@@ -267,6 +295,7 @@ Solver 5
   Nonlinear System Newton After Iterations = 100
   Nonlinear System Newton After Tolerance = 1.0e-05
   Nonlinear System Reset Newton = Logical True
+
   Steady State Convergence Tolerance = Real 1.0e-4
 
   Average Velocity Name = string BPmeanvel ! vertically averaged horizontal velocity
@@ -284,6 +313,7 @@ Solver 5
   Exported Variable 7 = -dofs 2 "BPmeanvel" 
   Exported Variable 8 = -dofs 1 zs
   Exported Variable 9 = -dofs 1 Bottom zs
+  Exported Variable 10 = -dofs 1 BPsurf
 End
 
 !#-----------------------------------------------------------------------
@@ -299,7 +329,7 @@ End
 !#                           * element averaged surface mass balance [XXX, >0 blabla](elemental)
 !#                           * element averaged basal mass balance [XXX, >0 blabla] (elemental)
 !#-----------------------------------------------------------------------
-Solver 6
+Solver 7
   Exec solver = After Timestep
   Equation = "Thickness"
   Procedure = "ElmerIceSolvers" "ThicknessSolver"
@@ -347,7 +377,7 @@ Solver 6
   Exported Variable 3 = -elem FFI  !fraction of floating integration points only used for SEM3    
 End
 
-Solver 7
+Solver 8
   Exec solver = After Timestep
   Equation = "Flotation"
   Procedure = "ElmerIceSolvers" "Flotation"
@@ -366,7 +396,7 @@ End
 
 ! Map the variable "zs" from the lower surface to the upper surface
 ! (it has been calculated on the lower surface by the flotation solver)
-Solver 8
+Solver 9
   Exec Solver = "After Timestep"
   Equation = "ProjectFSUpper"
   Procedure = File "StructuredProjectToPlane" "StructuredProjectToPlane"
@@ -375,7 +405,7 @@ Solver 8
   Operator 1 = String "bottom"
 End
 
-Solver 9
+Solver 10
   Exec Solver = "After Timestep"
   Equation = "MapCoordinate"
   Procedure = File "StructuredMeshMapper" "StructuredMeshMapper"
@@ -386,7 +416,7 @@ Solver 9
   Bottom Surface Variable Name = String zb
 End
 
-Solver 10
+Solver 11
   Exec Solver = String "after saving"
   Equation = String "ResultOutput"
   Procedure = File "ResultOutputSolve" "ResultOutputSolver"
@@ -397,7 +427,7 @@ Solver 10
   Vtu Format = Logical True
 End
 
-!Solver 11
+!Solver 12
 !  Exec Solver = "After timestep"
 !  Equation = "HeightDepth2"
 !  Procedure = "StructuredProjectToPlane" "StructuredProjectToPlane"
@@ -408,13 +438,13 @@ End
 
 !--------------------------------------------------------
 Equation 1
-  Active Solvers(7) = 1 2 3 5 8 9 10
+  Active Solvers(8) = 1 2 3 5 6 9 10 11
   Flow Solution Name = String "Flow Solution"
   Convection = Computed
 End
 
 Equation 2
-  Active Solvers(3) = 4 6 7 
+  Active Solvers(3) = 4 7 8
   Flow Solution Name = String "Flow Solution"
   Convection = Computed
 End
@@ -435,7 +465,7 @@ Boundary Condition 2
 
   ! ice pressure minus ocean pressure
   Normal Surface Traction = Variable Coordinate 3, Bottom zs
-    Real Lua "(rhoi*math.abs(gravity)*(tx[1] - tx[0]) - math.max(rhow*math.abs(gravity)*(zsl - tx[0]), 0.0))"
+    Real Lua "-(rhoi*math.abs(gravity)*(tx[1] - tx[0]) - math.max(rhow*math.abs(gravity)*(zsl - tx[0]), 0.0))"
 End
 
 Boundary Condition 3
@@ -451,9 +481,9 @@ Boundary Condition 4
   Body Id = 2
   height = Real 0.0
 
-  Slip Coefficient 2 = Variable Coordinate 3
+  Slip Coefficient 1 = Variable Coordinate 3
     Real Procedure "ElmerIceUSF" "SlidCoef_Contact"
-  Slip Coefficient 3 = Variable Coordinate 3
+  Slip Coefficient 2 = Variable Coordinate 3
     Real Procedure "ElmerIceUSF" "SlidCoef_Contact"
   Test Contact Tolerance = real 1.0e-10
 

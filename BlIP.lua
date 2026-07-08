@@ -17,6 +17,8 @@ beta = 0.1/1000.0
 eta = (1.0*100.0)^(-1.0/nn)
 --! approx minus 5C
 
+zsl = 0.0
+
 -- MISMIP+ bedrock elevation, Eq. (1) and Table 1 of Cornford et al. (2020)
 xbar = 300.0e3
 B0   = -150.0

@@ -120,3 +120,9 @@ Please make your own judgments on achieving steady state and suitable resolution
 
 I consider MediumSpunupGeom.nc to be a viable spun up SSA geometry for starting MISMIP+ standard experiments. Can also be used as a starting point for spinning up a BP run.
 
+Using the spun up geometry to kick off a BP run:
+```bash
+module load elmer/devel
+elmerf90 ../HydrostaticNSVec.F90 -o HydrostaticNSVec_local.so
+mpirun -np 5 ElmerSolver BP_r.sif > output.txt
+```
