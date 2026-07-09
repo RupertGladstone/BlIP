@@ -11,7 +11,8 @@ $dt = #2592000.0 / yearinsec ! 30 days
 
 !--------------------------------------------------------
 Header
-  Mesh DB "mesh"
+  Mesh DB "coarseish"
+!  Mesh DB "mesh"
 !  Mesh DB "mesh_medium"
 End
 
@@ -34,9 +35,9 @@ Simulation
   Timestepping Method = "BDF"
   BDF Order = 1
 
-  Timestep Intervals = 100
+  Timestep Intervals = 1200
   Timestep Sizes = Real $dt
-  Output Intervals = 1
+  Output Intervals = 20
 
   Steady State Min Iterations = 1
   Steady State Max Iterations = 1
@@ -158,7 +159,7 @@ Solver 1
   Exec Solver = "Before all"
   Equation = "GridDataReader"
   Procedure = "GridDataReader" "GridDataReader"
-  Filename = File "VTUoutputs/MediumSpunupGeom.nc"
+  Filename = File "CoarseSpunupGeom.nc"
   X Dim Name = String "x"
   Y Dim Name = String "y"
   Variable 1 = String "h"
@@ -171,7 +172,22 @@ Solver 1
   Target Variable 6 = String "horizontal velocity 2"
 End
 
+! Seed "Bottom zs" before the first BP solve (Solver 7), which reads it in
+! the icefront BC. Without this, timestep 1 sees an unset (zero) value there
+! instead of the real surface elevation, giving a spuriously reversed
+! icefront traction until the "after timestep" copy of this solver (now
+! Solver 10) first runs. Must come after Solver 1 (GridDataReader), which is
+! what populates "zs" in the first place.
 Solver 2
+  Exec Solver = "Before All"
+  Equation = "ProjectFSUpper_init"
+  Procedure = File "StructuredProjectToPlane" "StructuredProjectToPlane"
+  Active Coordinate = Integer 3
+  Variable 1 = String "zs"
+  Operator 1 = String "bottom"
+End
+
+Solver 3
   Exec Solver = "Before All"
   Equation = "MapCoordinateInit"
   Procedure = "StructuredMeshMapper" "StructuredMeshMapper"
@@ -182,7 +198,7 @@ Solver 2
   Bottom Surface Variable Name = String zb
 End
 
-Solver 3
+Solver 4
   Exec Solver = "Before timestep"
   Equation = "HeightDepth"
   Procedure = "StructuredProjectToPlane" "StructuredProjectToPlane"
@@ -211,7 +227,7 @@ End
 !#                           * grounded fraction [] (elemental)
 !#                           * floating fraction [] (elemental)
 !#-----------------------------------------------------------------------
-Solver 4
+Solver 5
   exec solver = before all
   Equation = "Flotation_init"
   Procedure = "ElmerIceSolvers" "Flotation"
@@ -243,7 +259,7 @@ End
 ! 2/3): it does VariableGet(...,'Normal Vector',UnFoundFatal=.TRUE.) internally
 ! (USF_Contact.F90) inside its grounding-line contact-release check, with no
 ! way to make that non-fatal from the sif - so this solver is not optional.
-Solver 5
+Solver 6
   Exec Solver = "Before Timestep"
   Equation = "Normal Vector"
   Procedure = "ElmerIceSolvers" "ComputeNormalSolver"
@@ -253,7 +269,7 @@ Solver 5
   Optimize Bandwidth = Logical False
 End
 
-Solver 6
+Solver 7
   Equation = "1stOrder-Stokes"
 !  Procedure = "HydrostaticNSVec" "HydrostaticNSSolver"
   Procedure = "HydrostaticNSVec_local" "HydrostaticNSSolver"
@@ -261,7 +277,6 @@ Solver 6
 
 ! Optionally populate all components to a vector (could be flow solution too)
   Velocity Vector Name = String "Flow Solution"
-  Constant-Viscosity Start =  Logical True
 
 !  Linear System Solver = Direct
 !  Linear System Direct Method = MUMPS
@@ -273,7 +288,7 @@ Solver 6
   Height Variable Name = String "BPsurf"
 
   ! Only applies to the first iteration, helps cold start
-  Constant-Viscosity Start =  Logical True
+!  Constant-Viscosity Start =  Logical True
 
   Linear System Solver = Iterative
 !  include "block2_idrs.sif"
@@ -285,13 +300,13 @@ Solver 6
   Linear System Iterative Method = GCR
   Linear System GCR Restart = 400
   Linear System Max Iterations = 2000
-  Linear System Convergence Tolerance = 1.0e-6
+  Linear System Convergence Tolerance = 1.0e-5
 !  Linear System Preconditioning = ILU1
   Linear System Preconditioning = ILUT
   Linear System ILUT Tolerance = 1.0e-4
   
   Nonlinear System Max Iterations = 100
-  Nonlinear System Convergence Tolerance  = 1.0e-5
+  Nonlinear System Convergence Tolerance  = 1.0e-4
   Nonlinear System Newton After Iterations = 100
   Nonlinear System Newton After Tolerance = 1.0e-05
   Nonlinear System Reset Newton = Logical True
@@ -329,7 +344,7 @@ End
 !#                           * element averaged surface mass balance [XXX, >0 blabla](elemental)
 !#                           * element averaged basal mass balance [XXX, >0 blabla] (elemental)
 !#-----------------------------------------------------------------------
-Solver 7
+Solver 8
   Exec solver = After Timestep
   Equation = "Thickness"
   Procedure = "ElmerIceSolvers" "ThicknessSolver"
@@ -377,7 +392,7 @@ Solver 7
   Exported Variable 3 = -elem FFI  !fraction of floating integration points only used for SEM3    
 End
 
-Solver 8
+Solver 9
   Exec solver = After Timestep
   Equation = "Flotation"
   Procedure = "ElmerIceSolvers" "Flotation"
@@ -396,7 +411,7 @@ End
 
 ! Map the variable "zs" from the lower surface to the upper surface
 ! (it has been calculated on the lower surface by the flotation solver)
-Solver 9
+Solver 10
   Exec Solver = "After Timestep"
   Equation = "ProjectFSUpper"
   Procedure = File "StructuredProjectToPlane" "StructuredProjectToPlane"
@@ -405,7 +420,7 @@ Solver 9
   Operator 1 = String "bottom"
 End
 
-Solver 10
+Solver 11
   Exec Solver = "After Timestep"
   Equation = "MapCoordinate"
   Procedure = File "StructuredMeshMapper" "StructuredMeshMapper"
@@ -416,7 +431,7 @@ Solver 10
   Bottom Surface Variable Name = String zb
 End
 
-Solver 11
+Solver 12
   Exec Solver = String "after saving"
   Equation = String "ResultOutput"
   Procedure = File "ResultOutputSolve" "ResultOutputSolver"
@@ -427,7 +442,7 @@ Solver 11
   Vtu Format = Logical True
 End
 
-!Solver 12
+!Solver 13
 !  Exec Solver = "After timestep"
 !  Equation = "HeightDepth2"
 !  Procedure = "StructuredProjectToPlane" "StructuredProjectToPlane"
@@ -438,13 +453,13 @@ End
 
 !--------------------------------------------------------
 Equation 1
-  Active Solvers(8) = 1 2 3 5 6 9 10 11
+  Active Solvers(9) = 1 2 3 4 6 7 10 11 12
   Flow Solution Name = String "Flow Solution"
   Convection = Computed
 End
 
 Equation 2
-  Active Solvers(3) = 4 7 8
+  Active Solvers(3) = 5 8 9
   Flow Solution Name = String "Flow Solution"
   Convection = Computed
 End
@@ -465,7 +480,7 @@ Boundary Condition 2
 
   ! ice pressure minus ocean pressure
   Normal Surface Traction = Variable Coordinate 3, Bottom zs
-    Real Lua "-(rhoi*math.abs(gravity)*(tx[1] - tx[0]) - math.max(rhow*math.abs(gravity)*(zsl - tx[0]), 0.0))"
+    Real Lua "(rhoi*math.abs(gravity)*(tx[1] - tx[0]) - math.max(rhow*math.abs(gravity)*(zsl - tx[0]), 0.0))"
 End
 
 Boundary Condition 3

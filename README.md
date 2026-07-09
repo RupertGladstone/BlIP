@@ -20,6 +20,11 @@ Transient 2D simulation using Shallow Shelf Approximation (SSA).
 
 "r" for "restart", though technically it isn't a restart. It uses the griddatareader to read in a spunup geometry from a previous simulation. Apart from that it is essentially the same as SSA.sif
 
+#### BP_r.sif
+
+Standard Blatter Patty solver, also using a netcdf file to "restart" from spun up geometry.
+
+#### BP.sif
 #### BP.sif
 
 
