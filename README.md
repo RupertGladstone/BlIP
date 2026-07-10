@@ -22,11 +22,11 @@ Transient 2D simulation using Shallow Shelf Approximation (SSA).
 
 #### BP_r.sif
 
-Standard Blatter Patty solver, also using a netcdf file to "restart" from spun up geometry.
+Standard Blatter Pattyn solver, also using a netcdf file to "restart" from spun up geometry. Minor modifications compared to the devel code, see notes in this repository (HydrostaticNSVec_local_changes.txt).
 
 #### FS_r.sif
 
-Full Stokes coming soon...
+Provisionsl full Stokes setup for the same domain. Only lightly tested as it is too expensive for my laptop. The first few timesteps seem reasonable, though with a loose convergence tolerance.
 
 ## Mesh generation
 
