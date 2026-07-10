@@ -123,7 +123,7 @@ End
 
 Please make your own judgments on achieving steady state and suitable resolution. I can't guarantee that run lengths in these sif files are sufficient to achieve steady state.
 
-I consider MediumSpunupGeom.nc to be a viable spun up SSA geometry for starting MISMIP+ standard experiments. Can also be used as a starting point for spinning up a BP run.
+I consider MediumSpunupGeom.nc to be a viable spun up SSA geometry for starting MISMIP+ standard experiments. Can also be used as a starting point for spinning up a BP run. [Edit: this comment is out of date. It was the Coarse geometry after all...]
 
 Using the spun up geometry to kick off a BP run:
 ```bash
