@@ -24,9 +24,9 @@ Transient 2D simulation using Shallow Shelf Approximation (SSA).
 
 Standard Blatter Patty solver, also using a netcdf file to "restart" from spun up geometry.
 
-#### BP.sif
-#### BP.sif
+#### FS_r.sif
 
+Full Stokes coming soon...
 
 ## Mesh generation
 
