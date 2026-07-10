@@ -894,8 +894,7 @@ CONTAINS
           - ListGetElementReal( IntPressure_h, Basis, Element, Found, GaussPoint = t )
       HavePres = HavePres .OR. Found
       
-      ! Slip coefficientyes
-
+      ! Slip coefficient
       
       !----------------------------------
       SlipCoeff = ListGetElementReal3D( SlipCoeff_h, Basis, Element, HaveSlip, GaussPoint = t )      

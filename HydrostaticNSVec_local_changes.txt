@@ -1,0 +1,116 @@
+
+Local changes in HydrostaticNSVec.F90 relative to devel branch.
+
+This list is authored by both Claude and myself (Rupert Gladstone). Most of these items show Claude`s text first followed by mine.  If you find mistakes they're probably mine...
+
+This list compiled 10th July 2026.
+
+
+Conceptually distinct changes, roughly in order of physical/numerical significance:
+
+1. Basal vertical velocity now includes Bottom Surface Accumulation (melt/accretion)
+   - Function: LocalDuz, PopulateDerivedFields
+   - Previously the diagnosed basal vertical velocity only accounted for advection
+     along the bed slope (u . grad(bed)). It silently ignored basal melting or
+     accretion, i.e. the same Body Force property ("Bottom Surface Accumulation")
+     that ThicknessSolver already reads for geometry evolution.
+   - Now LocalDuz also accumulates a nodal "bsa" (bottom surface accumulation)
+     field from that same Body Force keyword, and the final basal vertical
+     velocity is w_base = u.grad(bed) + bsa, using the same sign convention as
+     ThicknessSolver (positive = mass gain/accretion).
+   - Added one-per-solver-call Info diagnostics reporting which of three cases
+     applies: Body Force not associated / present but keyword missing / found
+     and used.
+   - Note that this functinoality is not tested. I've only run with zero lower
+     surface accum so far.
+
+2. Optional minimum-viscosity floor ("Minimum Viscosity" material keyword)
+   - Function: EffectiveViscosityVec
+   - New optional keyword adds a floor to the effective viscosity:
+     eta_eff = eta_glen + eta_min, applied additively (not as a hard max), so
+     the strain-rate derivative is untouched and there's no iteration-to-
+     iteration chatter from a hard clamp switching on/off.
+   - Guards against the Glen shear-thinning runaway (strain rate explodes ->
+     viscosity -> 0) in under-resolved or over-steep elements.
+   - I strongly recommend against using this. In testing I think it is having
+     more of an impact than it is supposed to, but I havne't figured out why.
+     I found other ways of resolving the issues I was facing, so this was never solved. 
+
+3. Velocity-dependent sliding law no longer sees a stale velocity
+   - New subroutine: UpdateVeloVectorHorizontal
+   - Called both (a) from the main nonlinear iteration loop, right before
+     boundary assembly, and (b) from PopulateDerivedFields.
+   - Previously the "Velocity Vector Name" field (e.g. "Flow Solution") that a
+     velocity-dependent sliding law (Weertman via USF_Sliding/USF_Contact)
+     reads was only refreshed once per steady-state iteration by
+     PopulateDerivedFields. That meant the friction law saw a
+     one-steady-state-iteration-stale velocity within the nonlinear loop,
+     which could stall convergence of the coupled iteration.
+   - Now it's refreshed every nonlinear iteration instead.
+   - This was necessary when using the USF_Contact functionality for basal
+     friction for marins ice sheets. Future plans are to move away from this
+     and implement instead grounding line handling using cutfem. 
+
+4. Velocity limiter moved from the full velocity field to the depth-averaged
+   velocity only
+   - Function: PopulateDerivedFields
+   - New optional "Velocity limit" keyword. Previously (per the inherited
+     README) a velocity limiter applied to the full "Flow Solution" field;
+     it's now applied only to the vertically-averaged horizontal velocity,
+     since that's the field ThicknessSolver actually consumes.
+     Leaves the full 3D velocity field unlimited/consistent with the
+     per-nonlinear-iteration refresh in point 3.
+   - Includes a NaN/Inf check (via raw IEEE-754 bit pattern, since a NaN
+     can't be caught with plain comparisons) that zeroes the averaged
+     velocity if triggered.
+   - Again, I found other ways around the problems I had with high velocity,
+     so the limiter is currently not triggered. But I do believe it is working
+     as intended.
+
+5. Two additional NaN/Inf guards
+   - One on HOVIvel at the end of PopulateDerivedFields (Fatal if triggered).
+   - One on the raw solved velocity DOFs immediately after DefaultSolve() in
+     the main nonlinear iteration loop (Fatal if triggered).
+   - Per the inherited README: "a couple of minor checks on array bounds and
+     nans that don't get triggered, but who knows, maybe one day we'll be
+     glad of them."
+   - More specificty re the nan checks: The standard ISNAN functions, even
+     the IEEE ones, are not valid when full math optimisation is used, hence
+     the raw bit pattern check. 
+
+6. Parallel-partition bug fix in the Shearrate/Viscosity output fields
+   - Function: EffectiveViscosityVec
+   - The SaveShear/SaveVisc flags (whether to accumulate "Shearrate"/
+     "Viscosity" output fields) are SAVE'd (persist across calls), but were
+     previously only set when PRESENT(DetJVec) was true. Since which call
+     site (bulk assembly vs. the DetJVec-less derived-field path) happens to
+     run first is not guaranteed to be the same across MPI ranks, whole
+     partitions could silently end up with these flags latched off and write
+     zero to those fields, without any diagnostic.
+   - Fix: the variable lookups (and flag-setting) now happen unconditionally
+     every call; only the actual DetJVec-dependent nodal-accumulation writes
+     are guarded (IF PRESENT(DetJVec)) at each individual write site.
+
+7. Defensive permutation-index guards
+   - A few places (e.g. the vertical-integration loop in PopulateDerivedFields,
+     and the UpdateVeloVectorHorizontal copy loop) now explicitly skip nodes
+     whose permutation index is < 1 (not part of the active solved DOF set -
+     e.g. passive/inactive elements), rather than assuming it's always valid.
+   - I think this is simply a defensive coding change that has not made any
+     functional difference to existing runs, but maybe it will be useful one
+     day. And if it is, we'll probably never know! 
+
+8. Two message/wording fixes (behaviourally inert)
+   - "Gravity not found in Constants section" corrected to "...in simulation
+     section" (the keyword is actually read from Simulation, not Constants).
+   - The deprecation Fatal for keyword "Pressure 2" now correctly says to use
+     "Surface Traction 3" instead of "Surface Traction 2" (was pointing at
+     the wrong replacement keyword).
+
+9. Build-compatibility fix
+   - USE MeshTransform, ONLY : DetectExtrudedStructure
+     changed to
+     USE MeshUtils, ONLY : DetectExtrudedStructure
+   - DetectExtrudedStructure lives in a different module than the stock file
+     (compiled against a different Elmer version) expects; needed to compile
+     cleanly against the current devel branch.
