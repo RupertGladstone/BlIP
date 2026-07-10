@@ -13,7 +13,7 @@ $dt = #2592000.0 / yearinsec ! 30 days
 
 Header
   Mesh DB "coarseish"
-  Mesh DB "." "mesh"
+!  Mesh DB "." "mesh"
 End
 
 !--------------------------------------------------------
