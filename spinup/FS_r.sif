@@ -1,0 +1,524 @@
+
+!--------------------------------------------------------
+!---LUA BEGIN
+! assert(loadfile('../BlIP.lua'))()
+!---LUA END
+
+!--------------------------------------------------------
+$name = "FS_r" ! Full Stokes (FS), for direct comparison with SSA_r / BP_r
+!!$dt = #864000.0 / yearinsec ! 10 days
+$dt = #2592000.0 / yearinsec ! 30 days
+
+!--------------------------------------------------------
+Header
+  Mesh DB "coarseish"
+!  Mesh DB "mesh"
+!  Mesh DB "mesh_medium"
+End
+
+!--------------------------------------------------------
+Constants
+! FS's own ice-front/base ocean pressure BC (SeaPressure/SeaSpring, see BC4)
+! can optionally account for the moving free surface in its basal-melt term,
+! for numerical stability of the coupled pressure/free-surface system. Left
+! off for now to keep this a closer, simpler match to BP/SSA; meltRate is
+! still applied through the free surface solvers' own Accumulation keyword
+! (Body Force 2) regardless of this switch.
+  Buoyancy Use Basal Melt = Logical False
+  Bottom Surface Name = String "zb"
+
+  Sea Level = Real #zsl
+  Water Density = Real #rhow
+  Ice density = Real #rhoi
+  Gas Constant = Real 8.314
+End
+
+!--------------------------------------------------------
+Simulation
+  Bandwidth optimization = Logical False
+
+  Coordinate System  = Cartesian 3D
+  Simulation Type ="Transient"
+  Simulation Timing = Logical True
+  Timestepping Method = "BDF"
+  BDF Order = 1
+
+  Timestep Intervals = 10 !1200
+  Timestep Sizes = Real $dt
+  Output Intervals = 1 !20
+
+  Steady State Min Iterations = 1
+  Steady State Max Iterations = 1
+
+  Initialize Dirichlet Conditions = Logical False
+  Output File = "$name".result" !"
+  max output level = 8
+
+!  Extruded Mesh Levels = Integer 10
+
+! ElmerSolver only calls the mesh extrusion routine at all if some keyword with
+! the prefix "Extruded Mesh" is present (see ElmerSolver.F90). "Extruded Mesh
+! Levels"/"Extruded Mesh Layers" would also satisfy this, but if present they
+! make ExtrudedDivision use plain uniform/geometric division and silently
+! ignore Extruded Elements/Limits/Ratios below. "Extruded Mesh Rotational"
+! triggers extrusion without affecting that division logic.
+  Extruded Mesh Rotational = Logical False
+
+! Split the vertical mesh into two sections, the division falling exactly at sea level for floating ice.
+  Extruded Elements(2) = Integer 8 1
+! This line should ensure the sea level falls exactly on a node layer:
+! (choose either this line or the line below)
+  Extruded Limits(3)   = Real 0.0 #rhoi/rhow# 1.0
+! This line should ensure the sea level falls mid way between node layers:
+!  Extruded Limits(3) = Real 0.0 #2.0*rhoi/rhow - 1.0# 1.0
+! This line gives more vertical refinement near the bottom of the lower part:
+  Extruded Ratios(2)   = Real 4.0 1.0
+End
+
+!--------------------------------------------------------
+Body 1
+  Name = "ice"
+  Initial Condition = 1
+  Equation = 1
+  Material = 1
+  Body Force = 1
+End
+
+Body 2
+  Name = "lower_surface"
+  Equation = 2
+  Initial Condition = 2
+  Body Force = 2
+  Material = 2
+End
+
+Body 3
+  Name = "upper_surface"
+  Equation = 3
+  Initial Condition = 3
+  Body Force = 3
+  Material = 3
+End
+
+!--------------------------------------------------------
+Initial Condition 1
+  depth = Real 0.0
+  height = Real 0.0
+  Pressure = Real 0.0
+  Velocity 1 = Real 0.0
+  Velocity 2 = Real 0.0
+  Velocity 3 = Real 0.0
+  bedrock = Variable Coordinate 1, Coordinate 2
+    Real Lua "mismip_bedrock(tx[0], tx[1])"
+End
+
+Initial Condition 2
+  meltRate = Real 0.0
+  bedrock = Variable Coordinate 1, Coordinate 2
+    Real Lua "mismip_bedrock(tx[0], tx[1])"
+End
+
+! Needed for Material 3's "Min zs" limiter (Body 3 shares its nodes with
+! Body 1's top layer, but each body needs its own Initial Condition entry -
+! same reason Body 2 duplicates "bedrock" from Body 1 above).
+Initial Condition 3
+  bedrock = Variable Coordinate 1, Coordinate 2
+    Real Lua "mismip_bedrock(tx[0], tx[1])"
+End
+
+!--------------------------------------------------------
+Body Force 1
+  Flow BodyForce 1 = Real 0.0
+  Flow BodyForce 2 = Real 0.0
+  Flow BodyForce 3 = Real #gravity
+End
+
+Body Force 2
+! Used here by the lower free surface solver (Solver 8) when evolving geometry.
+! NOTE the sign: FreeSurfaceSolver's "<Variable> Accumulation" convention is
+! "positive = surface moves in +z". For the base that is the OPPOSITE sense to
+! meltRate/"Bottom Surface Accumulation"'s "positive = accretion" convention
+! used by BP/SSA's ThicknessSolver (accretion at the base means zb moves DOWN,
+! i.e. negative here) - so this must be negated, unlike the upper surface below.
+  zb Accumulation = Variable meltRate
+    Real MATC "-tx"
+End
+
+Body Force 3
+! Same accumulation convention as Top Surface Accumulation in BP/SSA: for the
+! upper surface "surface moves up" and "accretion" are the same sense, so no
+! sign flip needed here.
+  zs Accumulation = Real 0.3
+End
+
+!--------------------------------------------------------
+Material 1
+  Sea level = Real #zsl
+  Density =  Real #rhoi
+
+  Viscosity Model = String "Glen"
+  Viscosity = Real 1.0
+  Glen Exponent = Real 3.0
+  Critical Shear Rate = Real 1.0e-10
+  Rate Factor 1 = Real 1.258e13
+  Rate Factor 2 = Real 6.046e28
+  Activation Energy 1 = Real 60e3
+  Activation Energy 2 = Real 139e3
+  Glen Enhancement Factor = Real 1.0
+  Limit Temperature = Real -10.0
+
+! NOTE: BP's own EffectiveViscosityVec reads "Relative Temperature", but the
+! generic NavierStokes solver's EffectiveViscosity (fem/src/MaterialModels.F90)
+! does not recognise that keyword at all - it looks for "Constant Temperature"
+! (or a real "Temperature" field) and is otherwise Fatal for the Glen case.
+! Same Arrhenius formula, same value, different keyword name.
+  Constant Temperature = Real -10.0
+
+! Not read by the generic NavierStokes solver (Cauchy stress is used
+! unconditionally there) - kept only for consistency/documentation with
+! BP_r.sif's Material 1, where this keyword is meaningful.
+  Cauchy = Logical True
+End
+
+Material 2
+  SSA Mean Density = Real #rhoi   ! The flotation solver has this hard coded
+  Density =  Real #rhoi
+  Min zb = Equals bedrock
+!  Max zb = Real 0.0
+End
+
+Material 3
+  Density = Real #rhoi
+  Min zs = Variable bedrock
+    Real Lua "tx[0] + MINH"
+End
+
+!--------------------------------------------------------
+
+! read in geometry from spun up state
+Solver 1
+  Exec Solver = "Before all"
+  Equation = "GridDataReader"
+  Procedure = "GridDataReader" "GridDataReader"
+  Filename = File "CoarseSpunupGeom.nc"
+  X Dim Name = String "x"
+  Y Dim Name = String "y"
+  Variable 1 = String "h"
+  Variable 2 = String "zs"
+  Variable 3 = String "zb"
+  Variable 4 = String "groundedmask"
+  Variable 5 = String "ssavelocity_1"
+  Target Variable 5 = String "Velocity 1"
+  Variable 6 = String "ssavelocity_2"
+  Target Variable 6 = String "Velocity 2"
+End
+
+Solver 2
+  Exec Solver = "Before All"
+  Equation = "MapCoordinateInit"
+  Procedure = "StructuredMeshMapper" "StructuredMeshMapper"
+  Active Coordinate = Integer 3
+  Dot Product Tolerance = Real 0.001
+  Minimum Mesh Height = Real #MINH
+  Top Surface Variable Name = String zs
+  Bottom Surface Variable Name = String zb
+End
+
+! Unlike BP, FS's icefront/base pressure BC (SeaPressure) only needs the
+! current node's own Coordinate 3 and the Constants-level sea level/water
+! density - it does not read a solver-populated surface-elevation variable at
+! all, so there is no equivalent here of BP_r.sif's "Bottom zs" seeding
+! workaround (Solver 2 there). GroundedMask does need seeding before the
+! first flow solve though, hence this being "before all":
+Solver 3
+  Exec Solver = never
+!  Exec Solver = Before all
+  Equation = "GroundedMaskInit"
+  Procedure = "ElmerIceSolvers" "GroundedSolver"
+  Variable = GroundedMask
+  Variable DOFs = 1
+  Bedrock Variable = String "bedrock"
+  Lower Surface Variable = String "zb"
+  Toler = Real #GLTolerance
+End
+
+Solver 4
+  Exec Solver = "Before timestep"
+  Equation = "HeightDepth"
+  Procedure = "StructuredProjectToPlane" "StructuredProjectToPlane"
+  Active Coordinate = Integer 3
+  Operator 1 = depth
+  Operator 2 = height
+End
+
+! Required by the SlidCoef_Contact USF (Boundary Condition 4, Slip Coefficient
+! 2/3): it does VariableGet(...,'Normal Vector',UnFoundFatal=.TRUE.) internally
+! (USF_Contact.F90) inside its grounding-line contact-release check, with no
+! way to make that non-fatal from the sif - so this solver is not optional.
+Solver 5
+  Exec Solver = "Before Timestep"
+  Equation = "Normal Vector"
+  Procedure = "ElmerIceSolvers" "ComputeNormalSolver"
+  Variable = "Normal Vector"
+  Variable DOFs = 3
+  ComputeAll = Logical True
+  Optimize Bandwidth = Logical False
+End
+
+! Water hydrostatic load at the lower surface, integrated from the same
+! "External Pressure" (SeaPressure) already set on Boundary Condition 4.
+! Required by SlidCoef_Contact's grounding-line retreat check (USF_Contact.F90):
+! it does VariableGet(...,'Fw',UnFoundFatal=.TRUE.) to compare the water load
+! against the basal reaction force ("Flow Solution Loads", from Solver 7's own
+! Calculate Loads below) and decide whether a grounded node should detach.
+! Must run before Solver 7 (lower solver number = earlier in the same "normal"
+! exec phase) since Fw needs to already exist when Navier-Stokes's own boundary
+! assembly evaluates SlidCoef_Contact.
+Solver 6
+  Equation = Fw
+  Procedure = "ElmerIceSolvers" "GetHydrostaticLoads"
+  Variable = Fw[Fwater:3]
+  Variable DOFs = 3
+End
+
+!#-----------------------------------------------------------------------
+!#                          FULL STOKES SOLVER
+!#-----------------------------------------------------------------------
+!# Viscosity and sliding-law keywords are interpreted the same way as by
+!# BP's HydrostaticNSVec (both ultimately call the same Glen's-law Arrhenius
+!# formula / the same ElmerIceUSF sliding-law procedures), modulo the
+!# "Relative Temperature" -> "Constant Temperature" translation noted above.
+!#-----------------------------------------------------------------------
+Solver 7
+  Equation = "Navier-Stokes"
+  Procedure = "FlowSolve" "FlowSolver"
+  Flow Model = Stokes
+
+  Stabilization Method = String Stabilized
+
+  ! mandatory to save bulk stiffness matrix (needed for e.g. Calculate Loads,
+  ! and for the free surface solvers' "Flow Solution Name" lookup)
+  Calculate Loads = Logical True
+
+  Linear System Solver = Direct
+  Linear System Direct Method = MUMPS
+  Linear System Abort Not Converged = True
+  MUMPS percentage increase working space = 100
+
+!  Linear System Solver = Iterative
+!  Linear System Abort Not Converged = True
+!  Linear System Residual Output = Integer 20
+!
+!  Linear System Iterative Method = GCR
+!  Linear System GCR Restart = 400
+!  Linear System Max Iterations = 2000
+!  Linear System Convergence Tolerance = 1.0e-5
+!  Linear System Preconditioning = ILUT
+!  Linear System ILUT Tolerance = 1.0e-4
+
+  Nonlinear System Max Iterations = 100
+  Nonlinear System Convergence Tolerance  = 1.0e-3
+  Nonlinear System Newton After Iterations = 100
+  Nonlinear System Newton After Tolerance = 1.0e-05
+  Nonlinear System Reset Newton = Logical True
+!  Nonlinear System relaxation factor = Real 0.6
+  
+  Steady State Convergence Tolerance = Real 1.0e-4
+
+  Exported Variable 1 = bedrock  
+End
+
+!#-----------------------------------------------------------------------
+!#                          FREE SURFACE SOLVERS
+!#-----------------------------------------------------------------------
+!# One per surface, replacing BP/SSA's Thickness+Flotation+ProjectFSUpper
+!# combination. Accumulation sign convention: see Body Force 2/3 above.
+!#-----------------------------------------------------------------------
+Solver 8
+  Exec Solver = "After Timestep"
+  Equation = "Lower Free Surface"
+  Variable = "zb"
+  Variable DOFs = 1
+  Procedure = "FreeSurfaceSolver" "FreeSurfaceSolver"
+
+  Apply Dirichlet = Logical True
+  Linear System Solver = Iterative
+  Linear System Iterative Method = BiCGStab
+  Linear System Max Iterations  = 500
+  Linear System Preconditioning = ILU1
+  Linear System Convergence Tolerance = 1.0e-08
+  Nonlinear System Max Iterations = 100
+  Nonlinear System Min Iterations = 2
+  Nonlinear System Convergence Tolerance = 1.0e-06
+  Steady State Convergence Tolerance = 1.0e-4
+
+  Stabilization Method = Stabilized
+  Flow Solution Name = String "Flow Solution"
+  Use Accumulation = Logical True
+
+  Exported Variable 1 = zb Residual
+  Exported Variable 1 DOFS = 1
+  Exported Variable 2 = Referencezb
+  Exported Variable 2 DOFS = 1
+  Exported Variable 3 = meltrate
+End
+
+Solver 9
+  Exec Solver = "After Timestep"
+  Equation = "Upper Free Surface"
+  Variable = "zs"
+  Variable DOFs = 1
+  Procedure = "FreeSurfaceSolver" "FreeSurfaceSolver"
+
+  Apply Dirichlet = Logical True
+  Linear System Solver = Iterative
+  Linear System Iterative Method = BiCGStab
+  Linear System Max Iterations  = 500
+  Linear System Preconditioning = ILU1
+  Linear System Convergence Tolerance = 1.0e-08
+  Nonlinear System Max Iterations = 100
+  Nonlinear System Min Iterations = 2
+  Nonlinear System Convergence Tolerance = 1.0e-06
+  Steady State Convergence Tolerance = 1.0e-4
+
+  Stabilization Method = Stabilized
+  Flow Solution Name = String "Flow Solution"
+  Use Accumulation = Logical True
+  Normal Flux = Logical False
+
+  Exported Variable 1 = zs Residual
+  Exported Variable 1 DOFS = 1
+  Exported Variable 2 = Referencezs
+  Exported Variable 2 DOFS = 1
+End
+
+Solver 10
+  Exec Solver = After Timestep
+  Equation = "GroundedMask"
+  Procedure = "ElmerIceSolvers" "GroundedSolver"
+  Variable = GroundedMask
+  Variable DOFs = 1
+  Bedrock Variable = String "bedrock"
+  Lower Surface Variable = String "zb"
+  Toler = Real #GLTolerance
+End
+
+Solver 11
+  Exec Solver = "After Timestep"
+  Equation = "MapCoordinate"
+  Procedure = File "StructuredMeshMapper" "StructuredMeshMapper"
+  Active Coordinate = Integer 3
+  Dot Product Tolerance = Real 0.001
+  Minimum Mesh Height = Real 20.0
+  Top Surface Variable Name = String zs
+  Bottom Surface Variable Name = String zb
+End
+
+Solver 12
+!  Exec Solver = String "always"
+  Exec Solver = String "after saving"
+  Equation = String "ResultOutput"
+  Procedure = File "ResultOutputSolve" "ResultOutputSolver"
+  Save Geometry Ids = Logical True
+  Output File Name = File $name
+  Output Format = String "vtu"
+  Output Directory = File "VTUoutputs"
+  Vtu Format = Logical True
+End
+
+!--------------------------------------------------------
+Equation 1
+  Active Solvers(8) = 1 2 4 5 6 7 11 12
+  Convection = Computed
+End
+
+Equation 2
+  Active Solvers(3) = 3 8 10
+  Flow Solution Name = String "Flow Solution"
+  Convection = Computed
+End
+
+Equation 3
+  Active Solvers(1) = 9
+  Flow Solution Name = String "Flow Solution"
+  Convection = Computed
+End
+
+!--------------------------------------------------------
+Boundary Condition 1
+  Name = "upstream"
+  Target Boundaries(1) = 1
+
+  Velocity 1 = Real 0.0
+  Velocity 2 = Real 0.0
+  Velocity 3 = Real 0.0
+End
+
+Boundary Condition 2
+  Name = "icefront"
+  Target Boundaries(1) = 2
+
+  Flow Force BC = Logical True
+  External Pressure = Variable Coordinate 3
+    Real Procedure "ElmerIceUSF" "SeaPressure"
+  Compute Sea Pressure = Logical True
+End
+
+Boundary Condition 3
+  Name = "sidewall"
+  Target Boundaries(2)  = 3 4
+
+  Velocity 2 = Real 0.0
+End
+
+Boundary Condition 4
+  Name = "lower_surface"
+  Target Boundaries(1) = 5
+  Body Id = 2
+  height = Real 0.0
+
+  Normal-Tangential Velocity = Logical True
+
+! zero normal velocity for grounded ice ...
+  Velocity 1 = Real 0.0
+  Velocity 1 Condition = Variable GroundedMask
+    Real MATC "tx - 0.5"
+
+! ... and pin the free-surface solver's own zb to bedrock there too, so it
+! doesn't drift independently of the (zero-normal-velocity-enforced) mesh
+  zb = Equals bedrock
+  zb Condition = Variable GroundedMask
+    Real MATC "tx - 0.5"
+
+! tangential components (2,3) under Normal-Tangential Velocity: sliding law
+  Slip Coefficient 2 = Variable Coordinate 3
+    Real Procedure "ElmerIceUSF" "SlidCoef_Contact"
+  Slip Coefficient 3 = Variable Coordinate 3
+    Real Procedure "ElmerIceUSF" "SlidCoef_Contact"
+  Test Contact Tolerance = real 1.0e-3
+
+  Grounding Line Definition = string discontinuous
+
+  Sliding Law = String Weertman
+  Weertman Friction Coefficient = Real 0.02
+  Weertman Exponent = Real #1.0/3.0
+  Weertman Linear Velocity = Real 0.00001
+
+! ... ocean water pressure for floating ice, normal-direction viscous spring
+! for the (floating-ice) time-dependent free-surface stability
+  Flow Force BC = Logical True
+  External Pressure = Variable Coordinate 3
+    Real Procedure "ElmerIceUSF" "SeaPressure"
+
+  Slip Coefficient 1 = Variable Coordinate 3
+    Real Procedure "ElmerIceUSF" "SeaSpring"
+  Compute Sea Spring = Logical True
+  Compute Sea Pressure = Logical True
+End
+
+Boundary Condition 5
+  Name = "upper_surface"
+  Target Boundaries(1) = 6
+  Body Id = 3
+  depth = Real 0.0
+End
