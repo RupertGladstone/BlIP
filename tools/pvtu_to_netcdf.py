@@ -30,6 +30,19 @@ components with an all-zero third) are split into separate scalar NetCDF
 variables per component, named "<field>_1", "<field>_2", ... matching the
 convention used to reference vector components in a sif (e.g. "SSAVelocity
 1"). An all-zero trailing third component is dropped.
+
+BP/FS output is a 3D (extruded) volumetric mesh, not the inherently-2D mesh
+SSA writes, so there is no single well-defined x/y surface to regrid unless
+one is extracted first. If the input mesh contains volumetric cells, a
+single boundary is extracted (by Elmer's "GeometryIds" cell-data field,
+written when "Save Geometry Ids = Logical True" is set on the output
+solver) before regridding. Use --surface-id to choose which one; if not
+given on a volumetric mesh it defaults to 104 (Elmer's convention for
+Boundary Condition 4, which is "lower_surface" in BP_r.sif/FS_r.sif).
+Elmer's own convention (fem/src/modules/ResultOutputSolve/VtuOutputSolver.F90):
+a boundary's GeometryIds value is 100 + <its Boundary Condition number in
+the sif> (e.g. Boundary Condition 5 -> 105), unless "BC Id Offset" was set
+to something other than the default 100 in the sif's output solver.
 """
 import argparse
 import math
@@ -39,6 +52,16 @@ import pyvista as pv
 from netCDF4 import Dataset
 from scipy.interpolate import NearestNDInterpolator
 
+# Elmer's default BC Id Offset (see VtuOutputSolver.F90): a boundary's
+# GeometryIds value is 100 + <Boundary Condition number>. 104 = Boundary
+# Condition 4 = "lower_surface" in BP_r.sif/FS_r.sif.
+DEFAULT_SURFACE_ID = 104
+
+# VTK cell type codes for volumetric (3D) cells likely to appear in an Elmer
+# extruded mesh (linear and quadratic tetrahedra, hexahedra, wedges,
+# pyramids). Used only to decide whether surface extraction is needed.
+_VOLUMETRIC_CELL_TYPES = {10, 12, 13, 14, 24, 25, 26, 27, 29, 30, 31, 32}
+
 
 def read_mesh(path):
     return pv.read(path)
@@ -46,6 +69,32 @@ def read_mesh(path):
 
 def sanitize_name(name):
     return name.strip().replace(" ", "_")
+
+
+def is_volumetric(mesh):
+    """True if the mesh contains any 3D (volumetric) cells."""
+    return any(int(t) in _VOLUMETRIC_CELL_TYPES for t in mesh.celltypes)
+
+
+def extract_surface_by_id(mesh, geometry_id):
+    """Return the subset of mesh whose "GeometryIds" cell-data field equals
+    geometry_id (an Elmer boundary, e.g. 104 for Boundary Condition 4)."""
+    if "GeometryIds" not in mesh.cell_data:
+        raise KeyError(
+            "Mesh has no 'GeometryIds' cell data - re-run the Elmer output "
+            "solver with 'Save Geometry Ids = Logical True', or pass "
+            "--surface-id only when that is available.")
+    ids = mesh.cell_data["GeometryIds"]
+    mask = ids == geometry_id
+    if not np.any(mask):
+        available = sorted(set(int(i) for i in ids))
+        raise ValueError(
+            f"No cells found with GeometryIds == {geometry_id}. "
+            f"Available GeometryIds in this file: {available}")
+    surface = mesh.extract_cells(mask)
+    print(f"extracted surface GeometryIds={geometry_id}: "
+          f"{surface.n_points} points, {surface.n_cells} cells")
+    return surface
 
 
 def list_variables(mesh):
@@ -99,7 +148,17 @@ def regrid(mesh, variables, dx, dy, ncells):
         spacing=(x[1] - x[0], y[1] - y[0], 1.0),
         origin=(x[0], y[0], 0.0),
     )
-    result = grid.sample(mesh)
+
+    # .sample() does a real 3D point-in-cell test, so a query grid fixed at
+    # z=0 mostly misses a mesh whose actual z (e.g. a BP/FS surface's zb/zs,
+    # often hundreds of metres away from 0) isn't ~0 everywhere - almost every
+    # point then falls back to the nearest-neighbor fill below, which is only
+    # meant for a few padding points. We only want x/y interpolation here (z
+    # is *data*, e.g. one of the fields being regridded, not geometry that
+    # should matter for it), so sample against a flattened copy instead.
+    mesh_flat = mesh.copy()
+    mesh_flat.points[:, 2] = 0.0
+    result = grid.sample(mesh_flat)
     valid = result["vtkValidPointMask"].astype(bool)
     grid_xy = result.points[:, :2]
 
@@ -165,12 +224,33 @@ def parse_args():
                          "given (default 100)")
     p.add_argument("--x-name", default="x", help="output x dimension/variable name")
     p.add_argument("--y-name", default="y", help="output y dimension/variable name")
+    p.add_argument("--surface-id", type=int, default=None,
+                    help="Elmer GeometryIds value of the boundary to extract "
+                         "before regridding (100 + Boundary Condition number, "
+                         "e.g. 104 for Boundary Condition 4). Only relevant "
+                         "for volumetric (BP/FS) output; ignored (with a "
+                         "warning) if given for an already-2D mesh. Defaults "
+                         f"to {DEFAULT_SURFACE_ID} on a volumetric mesh if "
+                         "not given.")
     return p.parse_args()
 
 
 def main():
     args = parse_args()
     mesh = read_mesh(args.input)
+
+    volumetric = is_volumetric(mesh)
+    if args.surface_id is not None:
+        if not volumetric:
+            print(f"warning: --surface-id {args.surface_id} given but input "
+                  "mesh has no volumetric cells (already a 2D surface) - "
+                  "ignoring and using the whole mesh")
+        else:
+            mesh = extract_surface_by_id(mesh, args.surface_id)
+    elif volumetric:
+        print(f"input is a volumetric (3D) mesh; no --surface-id given, "
+              f"defaulting to {DEFAULT_SURFACE_ID} (see --help)")
+        mesh = extract_surface_by_id(mesh, DEFAULT_SURFACE_ID)
 
     if args.list_variables:
         list_variables(mesh)

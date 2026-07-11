@@ -131,3 +131,10 @@ module load elmer/devel
 elmerf90 ../HydrostaticNSVec.F90 -o HydrostaticNSVec_local.so
 mpirun -np 5 ElmerSolver BP_r.sif > output.txt
 ```
+
+Process the BP adjusted geometry into a netcdf file (should be close to steady state for the BP solver):
+```bash
+conda activate outflow 
+python3 tools/pvtu_to_netcdf.py spinup/VTUoutputs/bp_r_t0061.pvtu  --variables h zs zb groundedmask 'horizontal velocity 1' 'horizontal velocity 2' --dx 1000  --output spinup/BPadjustedGeom.nc
+```
+
