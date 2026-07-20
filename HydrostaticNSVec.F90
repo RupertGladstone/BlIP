@@ -161,12 +161,6 @@ CONTAINS
       
       SaveShear = .FALSE.
       SaveVisc = .FALSE.
-      ! Look up the optional output fields unconditionally. These flags are
-      ! SAVEd, so previously latching them on PRESENT(DetJVec) made the result
-      ! depend on which call site (bulk assembly vs the DetJVec-less derived-
-      ! field path) happened to be hit first on each MPI rank -- whole
-      ! partitions then silently wrote zero. The DetJVec-dependent (nodal)
-      ! writes are guarded at the write sites instead.
       ShearVar => VariableGet( CurrentModel % Mesh % Variables,'Shearrate',ThisOnly=.TRUE.)
       SaveShear = ASSOCIATED(ShearVar)
       ViscVar => VariableGet( CurrentModel % Mesh % Variables,'Viscosity',ThisOnly=.TRUE.)
@@ -1307,10 +1301,8 @@ CONTAINS
 
     ! Copy the horizontal velocity components into the velocity-vector field.
     ! No velocity limiting is applied here: the limiter is applied ONLY to the
-    ! depth-averaged velocity (HOVIvel) below, because that is the field the
-    ! ThicknessSolver consumes. Keeping the full velocity (e.g. Flow Solution)
-    ! unlimited makes it consistent with the per-nonlinear-iteration refresh that
-    ! feeds the basal sliding law, and avoids a field that is only sometimes limited.
+    ! depth-averaged velocity below, because that is the field the
+    ! ThicknessSolver consumes.
     IF( dofs == 1 ) THEN
       ! Separate-component fallback ("<name> 1" / "<name> 2").
       DO i=1,Mesh % NumberOfNodes
@@ -1401,9 +1393,6 @@ CONTAINS
         ! Initailize values at the bedrock
         k1 = VarFull % Perm(i1)
         IF(k1>0) THEN
-          ! w_base = u.grad(bed) + Bottom Surface Accumulation, matching the
-          ! sign convention ThicknessSolver uses for the same Body Force
-          ! keyword (Source = SMB + BMB, positive = mass gain/accretion).
           VarFull % Values(dofs*(k1-1)+zdof) = 1.0_dp * ub(k1) + bsa(k1)
         END IF
           
@@ -1591,16 +1580,7 @@ CONTAINS
     
   END SUBROUTINE InitializeHeightField
 
-  !---------------------------------------------------------------------------------------
-  ! Copy the 2-dof primary horizontal velocity into the horizontal components of the
-  ! "Velocity Vector Name" field (default "Flow Solution"). Boundary user functions that
-  ! read that field for a velocity-dependent sliding law (e.g. Weertman via
-  ! USF_Sliding/USF_Contact) would otherwise see the value written by PopulateDerivedFields,
-  ! which is updated only once per steady-state iteration -> a one-SS-iteration-stale
-  ! velocity that freezes the friction within the nonlinear loop and stops the coupled
-  ! iteration from converging. Call this at every nonlinear iteration, before the boundary
-  ! assembly, so the sliding law sees the current (1-NL-iteration-lagged) velocity instead.
-  !---------------------------------------------------------------------------------------
+
   SUBROUTINE UpdateVeloVectorHorizontal()
 
     IMPLICIT NONE
@@ -1753,6 +1733,7 @@ SUBROUTINE HydrostaticNSSolver(Model, Solver, dt, Transient)
   TYPE(GaussIntegrationPoints_t) :: IP
   INTEGER :: Element_id
   INTEGER :: i, n, nb, nd, dim, Active, maxiter, iter, idx
+  INTEGER :: STDOFs
   INTEGER(INT64) :: ibits
   REAL(KIND=dp) :: Norm
   LOGICAL :: Found, Converged
@@ -1767,6 +1748,8 @@ SUBROUTINE HydrostaticNSSolver(Model, Solver, dt, Transient)
 !------------------------------------------------------------------------------ 
 
   dim = CoordinateSystemDimension()
+  STDOFs = Solver % Variable % DOFs
+
   Mesh => GetMesh()
   Params => GetSolverParams() 
   pSolver => Solver
@@ -1879,7 +1862,12 @@ SUBROUTINE HydrostaticNSSolver(Model, Solver, dt, Transient)
     CALL DefaultFinishBoundaryAssembly()
 
     CALL DefaultFinishAssembly()
+
+    ! Resetting Dimension temporarily as a hack to allow normal-tangential
+    ! velocity boundary conditions to function
+    IF (dim == (STDOFs+1)) CurrentModel % Dimension = STDOFs
     CALL DefaultDirichletBCs()
+    IF (dim == (STDOFs+1)) CurrentModel % Dimension = dim
 
     ! Check stepsize for nonlinear iteration
     !------------------------------------------------------------------------------

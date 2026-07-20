@@ -114,3 +114,43 @@ Conceptually distinct changes, roughly in order of physical/numerical significan
    - DetectExtrudedStructure lives in a different module than the stock file
      (compiled against a different Elmer version) expects; needed to compile
      cleanly against the current devel branch.
+
+10. Normal-Tangential Velocity segfault fix (dimension/DOFs mismatch)
+   - Function: HydrostaticNSSolver
+   - Normal-Tangential Velocity BCs (used e.g. for a lateral boundary
+     constrained toward a reference cross-boundary flow rather than a hard
+     zero, when comparing SSA/BP/FS on the same subdomain) segfaulted for
+     this solver's 2-DOF "Horizontal Velocity" variable on a genuinely 3D
+     mesh. Root cause: Elmer's generic Normal-Tangential rotation machinery
+     (DefaultDirichletBCs -> AverageBoundaryNormals etc.) expects the
+     coordinate system dimension to match the number of solved DOFs; here
+     dim=3 but STDOFs=2, a mismatch it doesn't handle safely.
+   - elmerice/Solvers/SSASolver.F90's SSABasalSolver has exactly the same
+     2-DOF-on-3D-mesh situation and works around it by temporarily lying
+     about the model dimension for the *entire* call: set near the top
+     ("IF (DIM == (STDOFs+1)) CurrentModel % Dimension = STDOFs"), restored
+     ("= DIM") right after CALL DefaultFinish() near the end.
+   - FIRST ATTEMPT copied that pattern exactly (same broad top-to-bottom
+     scope) and it was wrong: SSA's own bulk assembly is inherently 2D
+     regardless of what CurrentModel % Dimension says, so lying about it for
+     the whole call is harmless there. This solver's bulk assembly is
+     genuinely 3D (real extruded volumetric elements) -- with the broad
+     hack, ElementMetricVec saw dim=2 during 3D bulk assembly and reported
+     every single element as degenerate ("Element dim larger than meshdim:
+     3 vs. 2"), hundreds of thousands of false-positive errors.
+   - FIX: scope the hack narrowly to just the CALL DefaultDirichletBCs()
+     line (inside the per-nonlinear-iteration loop), which is the only
+     place that actually needs it -- set immediately before, restored
+     immediately after, every iteration. Bulk assembly, which runs earlier
+     in the same iteration, is untouched and sees the correct dim=3
+     throughout.
+   - Verified with FSR_BP.sif's lateral boundary (Normal-Tangential
+     Horizontal Velocity, constraining the normal component toward a
+     reference value) on the actual production-size mesh, flow solver
+     enabled (not just a smoke test with it disabled, which would not have
+     exercised either bug): 0 segfaults, 0 degenerate-element errors, 0
+     "Element dim larger than meshdim" messages, clean progress into the
+     linear solve. Not yet verified for numerical correctness of the
+     converged solution itself, only that assembly and BC enforcement no
+     longer crash or corrupt geometry -- worth a closer look once real runs
+     converge.
