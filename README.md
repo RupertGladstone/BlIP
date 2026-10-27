@@ -1,7 +1,7 @@
 
 # BlIP
 
-Blatter-Pattyn ISMIP Plus setup for Elmer/Ice
+Blatter-Pattyn MISMIP Plus setup for Elmer/Ice
 
 Notes for viewing this readme: \
 The markdown should automatically be interpreted when viewing this file on the github website. \
